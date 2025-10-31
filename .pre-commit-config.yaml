@@ -1,0 +1,36 @@
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+
+repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  # Ruff version.
+  rev: v0.11.5
+  hooks:
+    # Run the linter.
+    - id: ruff
+    # Run the formatter.
+    - id: ruff-format
+- repo: https://github.com/RobertCraigie/pyright-python
+  rev: v1.1.399
+  hooks:
+    - id: pyright
+      additional_dependencies:
+        - pymodbus[serial]>=3.11
+        - pytest>=3.8
+- repo: https://github.com/compilerla/conventional-pre-commit
+  rev: v4.2.0
+  hooks:
+    - id: conventional-pre-commit
+      stages: [commit-msg]
+- repo: local
+  hooks:
+    - id: pytest-check
+      name: pytest-check
+      entry: pytest
+      language: system
+      pass_filenames: false
+      always_run: true
+      stages: [pre-commit]
+
+
