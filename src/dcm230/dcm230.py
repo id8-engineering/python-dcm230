@@ -1,6 +1,6 @@
 """Driver class for Eastron DCM230 Modbus energy meters.
 
-This module provides a generic, configurable driver for the Carlo Gavazzi EM511
+This module provides a generic, configurable driver for the Eastron Dcm230
 series of energy meters, using pymodbus for serial communication.
 
 The design uses dataclasses to define register specifications and a class
@@ -124,11 +124,8 @@ class Dcm230:
     dynamically mapped to @property accessors based on `_register_specs`.
     """
 
-    INT16_REG_COUNT = 1
-    INT32_REG_COUNT = 2
-
-    INPUT_MAX_VALUE_32 = 0x7FFFFFFF
-    INPUT_MAX_VALUE_16 = 0x7FFF
+    REG_COUNT_INT16 = 1
+    REG_COUNT_FLOAT32 = 2
 
     _register_specs: Final[dict[str, RegisterSpec]] = {
         "V": RegisterSpec(address=0x0000, count=2, decimals=1),
@@ -225,19 +222,12 @@ class Dcm230:
             ValueError: If an invalid number of registers is provided or an
                 overflow marker is detected.
         """
-        if len(regs) == self.INT16_REG_COUNT:
+        if len(regs) == self.REG_COUNT_INT16:
             value = regs[0]
-            if value == self.INPUT_MAX_VALUE_16:
-                msg = f"Input overflow EEE for 16-bit register: device_address={self.device_address} address={address}"
-                raise ValueError(msg)
             return value
 
-        if len(regs) == self.INT32_REG_COUNT:
+        if len(regs) == self.REG_COUNT_FLOAT32:
             value = struct.unpack(">f", struct.pack(">HH", regs[0], regs[1]))[0]
-            if value == self.INPUT_MAX_VALUE_32:
-                msg = f"Input overflow EEE for 32-bit register: device_address={self.device_address} address={address}"
-                raise ValueError(msg)
             return value
         msg = f"Unexpected register count: {len(regs)} for address={address}"
         raise ValueError(msg)
-
