@@ -1,0 +1,15 @@
+[project]
+name = "python-dcm230"
+version = "0.1.0"
+description = "Driver for Eastron DCM230 Series Single Phase Energy Meters using Modbus RTU"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.3.0",
+    "ruff>=0.14.3",
+    "pyright>=1.1.406",
+    "pytest>=8.4.2",
+]
