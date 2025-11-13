@@ -12,7 +12,7 @@ registers.
 import struct
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Final, TypeVar
+from typing import ClassVar, Final, TypeVar
 
 from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ModbusException
@@ -54,7 +54,7 @@ def register_properties(cls: T) -> T:
     a corresponding @property getter, and optionally a setter if `writable=True`.
 
     The generated getter automatically calls `_read_register(register_name)`
-    and the setter calls `_write_register(address, value)` with range validation
+    and the setter calls `_write_registers(address, value)` with range validation
     if enabled in the `RegisterSpec`.
 
     Args:
@@ -97,7 +97,7 @@ def register_properties(cls: T) -> T:
             if _spec.range and not (_spec.min <= value <= _spec.max):
                 msg = f"Invalid value for '{_name}': {value}. Must be between {_spec.min} and {_spec.max}."
                 raise ValueError(msg)
-            self._write_register(_spec.address, int(value))
+            self._write_registers(_spec.address, int(value))
 
         prop = property(getter, setter) if spec.writable else property(getter)
 
@@ -121,11 +121,56 @@ class Dcm230:
 
     SINGLE_REGISTER = 1
     MAX_REGS = 2
+
     INPUT_REGISTER = 0x03
     HOLDING_REGISTER = 0x04
 
+    BACKLIT_OPTIONS: ClassVar[list[int]] = [0, 5, 10, 20, 30, 60]
+    DCM230_REGISTER_BACKLIT_TIME = 0x003C
+    DCM230_REGISTER_RESET_MAX_DMD_AND_PARTIAL_ENERGY = 0xF010
+    RESET_MAX_DMD = 0x0000
+    RESET_PARTIAL_ENERGY = 0x0003
+
     _register_specs: Final[dict[str, RegisterSpec]] = {
-        "V": RegisterSpec(address=0x0000, count=2, decimals=1, reg_type=0x03),
+        "V": RegisterSpec(address=0x0000, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "A": RegisterSpec(address=0x0006, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "W": RegisterSpec(address=0x000C, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "kwh": RegisterSpec(address=0x0048, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "W_dmd": RegisterSpec(address=0x0054, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "W_dmd_peak": RegisterSpec(address=0x0056, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "kwh_tot": RegisterSpec(address=0x0156, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "kwh_partial": RegisterSpec(address=0x0180, count=2, decimals=1, reg_type=INPUT_REGISTER),
+        "dmd_period": RegisterSpec(
+            address=0x0002,
+            count=2,
+            range=True,
+            min=0,
+            max=60,
+            writable=True,
+            reg_type=HOLDING_REGISTER,
+            return_type=int,
+        ),
+        "network_info": RegisterSpec(
+            address=0x0012, count=2, range=True, min=0, max=3, writable=True, reg_type=HOLDING_REGISTER, return_type=int
+        ),
+        "device_id": RegisterSpec(
+            address=0x0014,
+            count=2,
+            range=True,
+            min=1,
+            max=247,
+            writable=True,
+            reg_type=HOLDING_REGISTER,
+            return_type=int,
+        ),
+        "password": RegisterSpec(address=0x0018, count=2, reg_type=HOLDING_REGISTER, return_type=int),
+        "baud_rate": RegisterSpec(
+            address=0x001C, count=2, range=True, min=0, max=5, writable=True, reg_type=HOLDING_REGISTER, return_type=int
+        ),
+        "energy_measurement_tool": RegisterSpec(
+            address=0xF920, count=2, range=True, min=0, max=3, writable=True, reg_type=HOLDING_REGISTER, return_type=int
+        ),
+        "serial_number": RegisterSpec(address=0xFC00, count=2, reg_type=HOLDING_REGISTER, return_type=int),
     }
 
     def __init__(self, device_address: int, client: ModbusSerialClient) -> None:
@@ -190,8 +235,8 @@ class Dcm230:
             return round(value, spec.decimals)
         return self._unpack(regs, spec.address)
 
-    def _write_register(self, address: int, value: int) -> None:
-        """Write a single Modbus register.
+    def _write_registers(self, address: int, value: int) -> None:
+        """Write to Modbus registers.
 
         Args:
             address: Register address to write.
@@ -200,12 +245,9 @@ class Dcm230:
         Raises:
             ModbusException: If the write operation fails.
         """
-        result = self.client.write_register(address=address, value=value, device_id=self.device_address)
+        result = self.client.write_registers(address=address, values=[value], device_id=self.device_address)
         if result.isError():
-            msg = (
-                "Failed to write to single register. "
-                f"device_address={self.device_address} address={address} value={value}"
-            )
+            msg = f"Failed to write to registers. device_address={self.device_address} address={address} value={value}"
             raise ModbusException(msg)
 
     def _unpack(self, regs: list[int], address: int) -> int:
@@ -232,3 +274,60 @@ class Dcm230:
             raise ValueError(msg)
 
         return struct.unpack(">f", struct.pack(">HH", regs[0], regs[1]))[0]
+
+    def reset_max_dmd(self) -> None:
+        """Reset max demand.
+
+        Raises:
+            ModbusException: If failed to write to registers.
+        """
+        self._write_registers(self.DCM230_REGISTER_RESET_MAX_DMD_AND_PARTIAL_ENERGY, self.RESET_MAX_DMD)
+
+    def reset_partial_energy(self) -> None:
+        """Reset partial energy.
+
+        Raises:
+            ModbusException: If failed to write to registers.
+        """
+        self._write_registers(self.DCM230_REGISTER_RESET_MAX_DMD_AND_PARTIAL_ENERGY, self.RESET_PARTIAL_ENERGY)
+
+    @property
+    def backlit_time(self) -> int:
+        """Backlit time.
+
+        Options:
+            0, 5, 10, 20, 30, 60 minutes.
+
+        Returns:
+            int: Current backlit time value.
+
+        Raises:
+            ValueError: If not a specified value.
+            ModbusException: If failed to read holding registers.
+        """
+        regs = self._read_registers(self.DCM230_REGISTER_BACKLIT_TIME, self.MAX_REGS, self.HOLDING_REGISTER)
+        value = round(self._unpack(regs, self.DCM230_REGISTER_BACKLIT_TIME))
+
+        if value not in self.BACKLIT_OPTIONS:
+            msg = f"Invalid backlit option: {value}. Must be one of: {self.BACKLIT_OPTIONS}"
+            raise ValueError(msg)
+        return value
+
+    @backlit_time.setter
+    def backlit_time(self, value: int) -> None:
+        """Backlite time.
+
+        Options:
+            0, 5, 10, 20, 30, 60 minutes.
+
+        Args:
+            value (int): Set backlit time.
+
+        Raises:
+            ModbusException: If failed to write to registers.
+            ValueError: If not specified value.
+        """
+        if value not in self.BACKLIT_OPTIONS:
+            msg = f"Invalid backlit option: {value}. Must be one of: {self.BACKLIT_OPTIONS}"
+            raise ValueError(msg)
+        self._write_registers(self.DCM230_REGISTER_BACKLIT_TIME, value)
