@@ -185,7 +185,6 @@ wheels = [
 
 [[package]]
 name = "python-dcm230"
-version = "0.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "pymodbus", extra = ["serial"] },
