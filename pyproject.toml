@@ -3,6 +3,7 @@ name = "python-dcm230"
 dynamic = ["version"]
 description = "Driver for Eastron DCM230 DC energy Meters using Modbus RTU"
 readme = "README.md"
+homepage = "https://github.com/id8-engineering/python-dcm230"
 
 license = "MIT"
 license-files = ["LICENSE"]
