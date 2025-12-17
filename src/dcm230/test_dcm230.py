@@ -65,7 +65,7 @@ def test_range_validation() -> None:
             setattr(meter, name, invalid_value)
 
 
-def read_input_registers() -> None:
+def test_read_input_registers() -> None:
     """Test all input registers."""
     client = MagicMock()
     mock_result = MagicMock()
@@ -84,7 +84,7 @@ def read_input_registers() -> None:
         assert value == 1
 
 
-def read_holding_registers() -> None:
+def test_read_holding_registers() -> None:
     """Test all holding registers."""
     client = MagicMock()
     mock_result = MagicMock()
