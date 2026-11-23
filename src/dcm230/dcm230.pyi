@@ -1,3 +1,5 @@
+# Copyright (c) 2025 ID8 Engineering AB
+
 from decimal import Decimal
 
 from pymodbus.client import ModbusSerialClient
