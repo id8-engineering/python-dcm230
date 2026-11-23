@@ -14,12 +14,12 @@ from pymodbus.client import ModbusSerialClient
 
 # Configure the Modbus client
 client = ModbusSerialClient(
-   port="COM3",  # or "/dev/ttyUSB0" on Linux
-   baudrate=9600,
-   parity="E",
-   stopbits=1,
-   bytesize=8,
-   timeout=1,
+    port="COM3",  # or "/dev/ttyUSB0" on Linux
+    baudrate=9600,
+    parity="E",
+    stopbits=1,
+    bytesize=8,
+    timeout=1,
 )
 
 # Device Modbus address

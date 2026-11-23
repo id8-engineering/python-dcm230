@@ -1,3 +1,5 @@
+# Copyright (c) 2025 ID8 Engineering AB
+
 """Driver class for Eastron DCM230 Modbus energy meters.
 
 This module provides a generic, configurable driver for the Eastron Dcm230

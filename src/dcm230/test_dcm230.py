@@ -1,3 +1,5 @@
+# Copyright (c) 2025 ID8 Engineering AB
+
 # ruff: noqa: S101, PLR2004, SLF001
 
 """Test file for driver."""
