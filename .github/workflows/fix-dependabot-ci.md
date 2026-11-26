@@ -31,7 +31,13 @@ permissions:
 concurrency:
   group: fix-dependabot-ci-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.conclusion }}
 
-engine: codex
+engine:
+  id: codex
+  # The address GitHub gives github-actions[bot] on the commits it creates, so the
+  # sign-off below matches the author however the commits are pushed.
+  env:
+    GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+    GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
 model: openai/gpt-5
 
 checkout:
@@ -83,8 +89,8 @@ A check failed on a Dependabot pull request at commit
 `${{ github.event.workflow_run.head_sha }}` (run ${{ github.event.workflow_run.html_url }}).
 The output of the failed jobs is in `/tmp/gh-aw/failed-checks.log`.
 
-The pull request's commits are created again by `github-actions[bot]`, and the DCO
-check wants the author's own sign-off on each of them:
+The pull request's commits are authored by `github-actions[bot]` (`GIT_AUTHOR_EMAIL` is
+set), and the DCO check wants the author's own sign-off on each of them:
 
     SIGN_OFF='Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
 
@@ -95,8 +101,9 @@ check wants the author's own sign-off on each of them:
    In both cases stop and call `noop`.
 2. Create the branch `fix/<Dependabot's branch>` from the current `main`, and add
    Dependabot's commit with `git cherry-pick ${{ github.event.workflow_run.head_sha }}`.
-   If it does not apply cleanly, stop and call `noop` with the reason. Then add the
-   sign-off above with `git commit --amend --no-edit --trailer "$SIGN_OFF"`.
+   If it does not apply cleanly, stop and call `noop` with the reason. Then make
+   `github-actions[bot]` its author and add the sign-off above with
+   `git commit --amend --no-edit --reset-author --trailer "$SIGN_OFF"`.
 3. Install the updated dependencies and reproduce the failure. CI runs these four
    checks on Python 3.10, 3.11, 3.12, 3.13 and 3.14, each with `UV_PYTHON` set to the
    version: `uv run pyright`, `uv run ruff check .`, `uv run ruff format --check .` and
