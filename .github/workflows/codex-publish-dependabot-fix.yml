@@ -1,0 +1,228 @@
+name: Publish Codex Dependabot fix
+
+on:
+  workflow_run:
+    workflows: [Codex fix CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  publish-patch:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+
+    steps:
+      - name: Find generated patch
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_name="codex-fix-$SOURCE_RUN_ID"
+          artifact_count="$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" \
+            --jq "[.artifacts[] | select(.name == \"$artifact_name\")] | length")"
+
+          if [ "$artifact_count" -eq 1 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Codex patch was generated; the reproduced checks passed."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve pull request
+        if: steps.artifact.outputs.available == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR_NUMBER" ]; then
+            echo "The source workflow is not associated with a pull request." >&2
+            exit 1
+          fi
+
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          head_repository="$(jq -r '.head.repo.full_name' <<< "$pr_json")"
+
+          if [ "$(jq -r '.state' <<< "$pr_json")" != "open" ]; then
+            echo "Pull request #$PR_NUMBER is not open." >&2
+            exit 1
+          fi
+
+          if [ "$(jq -r '.user.login' <<< "$pr_json")" != "dependabot[bot]" ]; then
+            echo "Pull request #$PR_NUMBER is not owned by Dependabot." >&2
+            exit 1
+          fi
+
+          if [ "$head_repository" != "$GITHUB_REPOSITORY" ]; then
+            echo "Refusing to update a branch in fork $head_repository." >&2
+            exit 1
+          fi
+
+          echo "head_ref=$(jq -r '.head.ref' <<< "$pr_json")" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r '.head.sha' <<< "$pr_json")" >> "$GITHUB_OUTPUT"
+
+      - name: Check out pull request head
+        if: steps.artifact.outputs.available == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download patch
+        if: steps.artifact.outputs.available == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.0
+        with:
+          name: codex-fix-${{ env.SOURCE_RUN_ID }}
+          path: ${{ runner.temp }}/codex-fix
+          github-token: ${{ github.token }}
+          run-id: ${{ env.SOURCE_RUN_ID }}
+
+      - name: Validate and apply patch
+        if: steps.artifact.outputs.available == 'true'
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          patch_dir="$RUNNER_TEMP/codex-fix"
+
+          if [ "$(cat "$patch_dir/head-sha")" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "The pull request changed while Codex was working; a newer run will handle it." >&2
+            exit 1
+          fi
+
+          git apply --check "$patch_dir/codex.patch"
+          git apply "$patch_dir/codex.patch"
+          git add --all
+
+          mapfile -t changed_files < <(git diff --cached --name-only)
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "The patch contains no changes." >&2
+            exit 1
+          fi
+
+          if [ "${#changed_files[@]}" -gt 20 ]; then
+            echo "Refusing a patch that changes more than 20 files." >&2
+            exit 1
+          fi
+
+          for path in "${changed_files[@]}"; do
+            case "$path" in
+              .github/workflows/*|.github/actions/*|.agents/*|.codex/*|AGENTS.md)
+                echo "Refusing protected path: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Create verified commit and update branch
+        if: steps.artifact.outputs.available == 'true'
+        id: publish
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+          EXPECTED_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const { execFileSync } = require("node:child_process");
+            const fs = require("node:fs");
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const headRef = process.env.HEAD_REF;
+            const headSha = process.env.EXPECTED_HEAD_SHA;
+            const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).trim();
+
+            if (git("rev-parse", "HEAD") !== headSha) {
+              throw new Error("The checked-out commit does not match the expected PR head.");
+            }
+
+            const changed = execFileSync(
+              "git",
+              ["diff", "--cached", "--name-only", "-z", "--no-renames"],
+            ).toString("utf8").split("\0").filter(Boolean);
+            const treeEntries = [];
+
+            for (const path of changed) {
+              if (fs.existsSync(path) || fs.lstatSync(path, { throwIfNoEntry: false })) {
+                const indexEntry = execFileSync("git", ["ls-files", "--stage", "-z", "--", path])
+                  .toString("utf8");
+                const match = indexEntry.match(/^([0-7]{6}) ([0-9a-f]+) 0\t/);
+                if (!match) throw new Error(`Unable to read index metadata for ${path}`);
+
+                const mode = match[1];
+                if (mode === "160000") {
+                  treeEntries.push({ path, mode, type: "commit", sha: match[2] });
+                  continue;
+                }
+
+                const content = mode === "120000"
+                  ? Buffer.from(fs.readlinkSync(path), "utf8")
+                  : fs.readFileSync(path);
+                const blob = await github.rest.git.createBlob({
+                  owner,
+                  repo,
+                  content: content.toString("base64"),
+                  encoding: "base64",
+                });
+                treeEntries.push({ path, mode, type: "blob", sha: blob.data.sha });
+              } else {
+                const oldEntry = execFileSync("git", ["ls-tree", "-z", "HEAD", "--", path])
+                  .toString("utf8");
+                const match = oldEntry.match(/^([0-7]{6}) (blob|tree|commit) [0-9a-f]+\t/);
+                if (!match) throw new Error(`Unable to read base metadata for deleted path ${path}`);
+                treeEntries.push({ path, mode: match[1], type: match[2], sha: null });
+              }
+            }
+
+            const tree = await github.rest.git.createTree({
+              owner,
+              repo,
+              base_tree: git("rev-parse", "HEAD^{tree}"),
+              tree: treeEntries,
+            });
+            const commit = await github.rest.git.createCommit({
+              owner,
+              repo,
+              message: "fix: address CI failures with Codex\n\nSigned-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+              tree: tree.data.sha,
+              parents: [headSha],
+            });
+
+            if (!commit.data.verification?.verified) {
+              throw new Error(`GitHub did not verify the bot signature: ${commit.data.verification?.reason ?? "unknown"}`);
+            }
+
+            await github.rest.git.updateRef({
+              owner,
+              repo,
+              ref: `heads/${headRef}`,
+              sha: commit.data.sha,
+              force: false,
+            });
+            core.setOutput("commit_sha", commit.data.sha);
+
+      - name: Comment on pull request
+        if: steps.artifact.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ steps.publish.outputs.commit_sha }}
+        run: |
+          gh pr comment "$PR_NUMBER" --body \
+            "Codex automatically generated and pushed signed commit \`${COMMIT_SHA:0:7}\` to address the CI failures."
